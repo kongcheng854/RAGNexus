@@ -1,0 +1,10 @@
+.env
+.venv
+.uv-cache
+.uv-python
+.git
+**/__pycache__
+**/*.egg-info
+build
+dist
+logs
