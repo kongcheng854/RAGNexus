@@ -22,10 +22,11 @@ def error_response(
     data: dict[str, Any] | None = None,
     *,
     status: int | None = None,
+    message: str | None = None,
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     request.state.error_code = int(error)
-    body = ResponseEnvelope(code=int(error), msg=error.message, data=data)
+    body = ResponseEnvelope(code=int(error), msg=message or error.message, data=data)
     return JSONResponse(body.model_dump(mode="json"), status_code=status or error.status, headers=headers)
 
 
@@ -43,7 +44,8 @@ def register_error_handlers(app: FastAPI) -> None:
         if exc.error.status >= 500 or 30000 <= exc.error < 50000:
             log_exception(request, exc, exc.error)
         headers = {"WWW-Authenticate": "Bearer"} if exc.error == ErrorCode.UNAUTHORIZED else None
-        return error_response(request, exc.error, exc.data, headers=headers)
+        message = str(exc) if exc.error in (ErrorCode.QUOTA_EXCEEDED, ErrorCode.PARAM_ERROR) else None
+        return error_response(request, exc.error, exc.data, headers=headers, message=message)
 
     @app.exception_handler(SQLAlchemyError)
     async def storage_error(request: Request, exc: SQLAlchemyError) -> JSONResponse:

@@ -19,6 +19,7 @@ class TenantContext:
     key_id: UUID | None = None
     key_prefix: str | None = None
     key_name: str | None = None
+    plan: str = "free"
 
 
 def hash_api_key(plaintext: str) -> str:
@@ -43,5 +44,5 @@ async def authenticate_api_key(session: AsyncSession, plaintext: str) -> TenantC
             raise AppError(ErrorCode.UNAUTHORIZED)
         return TenantContext(
             tenant_id=tenant.id, tenant_name=tenant.name, key_id=key.id,
-            key_prefix=key.key_prefix, key_name=key.name,
+            key_prefix=key.key_prefix, key_name=key.name, plan=tenant.plan,
         )

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { AppHeader } from "../components/AppHeader";
 import { TenantBadges } from "../components/TenantBadges";
 import { useAuthMe } from "../hooks/useAuthMe";
@@ -11,7 +11,7 @@ import { ExistingBaseDialog } from "../components/ExistingBaseDialog";
 import { UploadTable } from "../components/UploadTable";
 import { useKnowledgeBases } from "../hooks/useKnowledgeBases";
 import { useUploadQueue } from "../hooks/useUploadQueue";
-import type { KnowledgeBase } from "../types/api";
+import type { DocumentResult, KnowledgeBase } from "../types/api";
 
 export function KnowledgePage() {
   const [params] = useSearchParams();
@@ -24,7 +24,13 @@ export function KnowledgePage() {
   const [existing, setExisting] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState("");
-  const queue = useUploadQueue();
+  const [submission, setSubmission] = useState<DocumentResult | null>(null);
+  const queue = useUploadQueue(setSubmission);
+  useEffect(() => {
+    if (!submission) return;
+    const timer = window.setTimeout(() => setSubmission(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [submission]);
   const files = useRef<HTMLInputElement>(null);
   const folder = useRef<HTMLInputElement>(null);
   const visibleBases = bases.filter((base) => base.tenant_id === tenant);
@@ -55,6 +61,7 @@ export function KnowledgePage() {
   function selectBase(base: KnowledgeBase) {
     if (queue.running) return;
     if (active?.kb_id !== base.kb_id && queue.items.length) queue.clear();
+    setSubmission(null);
     setSelected(base);
     setNotice("");
   }
@@ -103,8 +110,8 @@ export function KnowledgePage() {
           {storageWarning && <p className="error-notice mt-3" role="alert">{storageWarning}</p>}
 
           <section className="upload-card">
-            <div className="flex flex-wrap items-start justify-between gap-4 p-6"><div><h2 className="text-lg font-semibold">导入知识文档</h2><p className="mt-1.5 text-sm text-muted">选择文件或整个文件夹，系统将逐个上传并同步建立索引。</p></div><span className="flex items-center gap-2 text-sm text-muted"><FileText size={16} />TXT / Markdown</span></div>
-            <input ref={files} className="sr-only" tabIndex={-1} aria-label="选择知识文件" type="file" multiple accept=".txt,.md" onChange={(event) => { acceptFiles(Array.from(event.target.files || [])); event.target.value = ""; }} />
+            <div className="flex flex-wrap items-start justify-between gap-4 p-6"><div><h2 className="text-lg font-semibold">导入知识文档</h2><p className="mt-1.5 text-sm text-muted">选择文件或整个文件夹，文件逐个提交，提交后在后台建立索引。</p></div><span className="flex items-center gap-2 text-sm text-muted"><FileText size={16} />TXT / Markdown / PDF / DOCX</span></div>
+            <input ref={files} className="sr-only" tabIndex={-1} aria-label="选择知识文件" type="file" multiple accept=".txt,.md,.pdf,.docx" onChange={(event) => { acceptFiles(Array.from(event.target.files || [])); event.target.value = ""; }} />
             <input ref={folder} className="sr-only" tabIndex={-1} aria-label="选择知识文件夹" type="file" multiple {...{ webkitdirectory: "", directory: "" }} onChange={(event) => { acceptFiles(Array.from(event.target.files || [])); event.target.value = ""; }} />
             <div className={`drop-zone ${dragging ? "drop-zone-active" : ""}`} onDragOver={(event) => { event.preventDefault(); if (!queue.running && active) setDragging(true); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }} onDrop={(event) => {
               event.preventDefault(); setDragging(false);
@@ -116,20 +123,29 @@ export function KnowledgePage() {
             }}>
               <div className="upload-icon"><Upload size={28} strokeWidth={1.5} /></div>
               <h3 className="mt-5 text-lg font-semibold">{active ? "把文档拖到这里，或选择上传" : "先选择一个知识库"}</h3>
-              <p className="mb-6 mt-2 text-sm text-muted">UTF-8 编码的 .txt、.md 文件，单个文件最多 100,000 字符</p>
+              <p className="mb-6 mt-2 text-sm text-muted">UTF-8 文本和 Markdown 最多 100,000 字符。Word（.docx）和文字版 PDF 上传后由后台解析。</p>
               <div className="flex flex-wrap justify-center gap-3"><Button variant="outline" disabled={!active || queue.running} onClick={() => files.current?.click()}><FileText size={16} />选择文件</Button><Button variant="outline" disabled={!active || queue.running} onClick={() => folder.current?.click()}><FolderOpen size={17} />选择文件夹</Button></div>
             </div>
             {notice && <p role="alert" className="error-notice mx-6 mb-5">{notice}</p>}
             <div className="queue-heading"><h3 className="text-base font-semibold">上传队列 <span className="ml-2 text-sm font-normal text-muted">{queue.items.length} 个文件</span></h3><Button variant="ghost" size="sm" disabled={queue.running || !queue.items.length} onClick={queue.clear}><X size={15} />清空队列</Button></div>
             {queue.items.length ? <UploadTable items={queue.items} running={queue.running} remove={queue.remove} /> : <div className="empty-queue"><FileStack size={30} strokeWidth={1.2} /><p className="mt-3 text-sm">队列还是空的，添加第一份知识文档吧。</p></div>}
-            {(queue.running || hasResults) && <div className="progress-section" aria-live="polite"><div className="mb-3 flex flex-wrap justify-between gap-2 text-sm"><span>{queue.running ? `正在处理 ${completed + 1} / ${queue.items.length}，请保持页面打开` : `已处理 ${completed} / ${queue.items.length} 个文件`}</span><span><span className="text-primary">成功 {successful}</span><span className="mx-3 text-[#c2cec7]">|</span><span className={failed ? "text-[#b34636]" : "text-muted"}>失败 {failed}</span></span></div><div role="progressbar" aria-label="文件处理进度" aria-valuenow={completed} aria-valuemin={0} aria-valuemax={queue.items.length} className="h-1.5 overflow-hidden rounded-full bg-[#e9eeeb]"><div className="h-full rounded-full bg-primary transition-all duration-300" style={{ width: `${progress}%` }} /></div></div>}
-            <div className="upload-footer"><p className="flex items-center gap-2 text-sm text-muted"><CircleAlert size={15} className="shrink-0" />{hasResults && failed ? "失败原因显示在对应文件下，修正后可重新选择文件上传。" : "文件按队列顺序处理，完成后可查看每份文档的结果。"}</p><Button disabled={!active || queue.running || !pending} onClick={() => { if (active) void queue.start(active); }}>{queue.running ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}{queue.running ? "正在上传" : `开始上传${pending ? ` · ${pending} 个文件` : ""}`}</Button></div>
+            {(queue.running || hasResults) && <div className="progress-section" aria-live="polite"><div className="mb-3 flex flex-wrap justify-between gap-2 text-sm"><span>{queue.running ? `正在处理 ${completed + 1} / ${queue.items.length}，请保持页面打开` : `已处理 ${completed} / ${queue.items.length} 个文件`}</span><span><span className="text-primary">已提交 {successful}</span><span className="mx-3 text-[#c2cec7]">|</span><span className={failed ? "text-[#b34636]" : "text-muted"}>失败 {failed}</span></span></div><div role="progressbar" aria-label="文件处理进度" aria-valuenow={completed} aria-valuemin={0} aria-valuemax={queue.items.length} className="h-1.5 overflow-hidden rounded-full bg-[#e9eeeb]"><div className="h-full rounded-full bg-primary transition-all duration-300" style={{ width: `${progress}%` }} /></div></div>}
+            <div className="upload-footer"><p className="flex items-center gap-2 text-sm text-muted"><CircleAlert size={15} className="shrink-0" />{hasResults && failed ? "失败原因显示在对应文件下，修正后可重新选择文件上传。" : "文件按队列顺序提交，索引进度可在知识库列表查看。"}</p><Button disabled={!active || queue.running || !pending} onClick={async () => { if (active) setNotice(await queue.start(active)); }}>{queue.running ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}{queue.running ? "正在上传" : `开始上传${pending ? ` · ${pending} 个文件` : ""}`}</Button></div>
           </section>
+          {successful > 0 && !queue.running && <Link className="mt-3 inline-block text-sm text-primary underline" to="/knowledge-bases">去列表查看进度</Link>}
+          {submission && <div role="status" className="fixed bottom-5 right-5 z-40 rounded-lg bg-[#184637] px-4 py-3 text-sm text-white shadow-lg">
+            {submission.status === 3 ? "已提交，正在后台索引" : "文档索引已完成"}
+          </div>}
           <p className="footer-note">知识库记录保存在当前浏览器，文档提交至后端服务。</p>
         </main>
       </div>
       {creating && <KnowledgeBaseDialog open onClose={() => setCreating(false)} onCreated={(base) => { remember(base); selectBase(base); }} />}
-      {existing && <ExistingBaseDialog tenant={tenant} onClose={() => setExisting(false)} onSelected={(base) => { remember(base); selectBase(base); }} />}
+      {existing && tenant && <ExistingBaseDialog onClose={() => setExisting(false)} onSelected={(kbId) => {
+        const known = visibleBases.find((base) => base.kb_id === kbId);
+        const base = known || { kb_id: kbId, tenant_id: tenant, name: kbId };
+        remember(base);
+        selectBase(base);
+      }} />}
     </div>
   );
 }

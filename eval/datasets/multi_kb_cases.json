@@ -1,0 +1,36 @@
+{
+  "name": "multi_kb_retrieval",
+  "default_profile": "balanced",
+  "cases": [
+    {
+      "id": "cross_kb_refund_vip",
+      "question": "订单完成后多久还能申请退款？银卡和金卡会员分别能获得多少补偿积分？",
+      "kb_ids": [
+        "68db18f8-5590-4f92-bf59-00e859d01918",
+        "3c4e97b7-9bb4-4a46-ab8f-2bda1dee8347"
+      ],
+      "ground_truth": "订单完成后七天内可申请退款。退款审核通过后，银卡会员补发 50 积分，金卡会员补发 100 积分。",
+      "source": {
+        "documents": [
+          "data/ecommerce/退款规则.md",
+          "data/customer_service/会员补偿与工单.md"
+        ]
+      }
+    },
+    {
+      "id": "cross_kb_coupon_ticket",
+      "question": "满减能和店铺优惠券一起用吗？就优惠问题提交客服工单后，最晚何时收到首次回复？",
+      "kb_ids": [
+        "68db18f8-5590-4f92-bf59-00e859d01918",
+        "3c4e97b7-9bb4-4a46-ab8f-2bda1dee8347"
+      ],
+      "ground_truth": "同一订单不可同时使用满减活动与店铺优惠券，二者择一适用。客服工单须在一个工作日内首次回复。",
+      "source": {
+        "documents": [
+          "data/ecommerce/优惠与积分.md",
+          "data/customer_service/会员补偿与工单.md"
+        ]
+      }
+    }
+  ]
+}

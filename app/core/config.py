@@ -9,19 +9,29 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_env: str = "local"
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/1"
     auth_enabled: bool = True
+    langfuse_enabled: bool = False
+    langfuse_host: AnyHttpUrl = AnyHttpUrl("http://localhost:3000")
+    langfuse_public_key: str = ""
+    langfuse_secret_key: SecretStr = SecretStr("")
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/rag_center"
     model_base_url: AnyHttpUrl = AnyHttpUrl("https://api.openai.com/v1")
     model_api_key: SecretStr = SecretStr("")
     embedding_model: str = Field(default="text-embedding-3-small", min_length=1)
     vector_store: Literal["pgvector"] = "pgvector"
+    document_storage_path: Path = Path("./data/uploads")
+    document_max_size_mb: int = Field(default=20, gt=0)
     chunk_size: int = Field(default=800, gt=0)
     chunk_overlap: int = Field(default=100, ge=0)
+    table_max_rows_per_chunk: int = Field(default=10, gt=0)
     top_k: int = Field(default=5, gt=0)
     keyword_search_provider: Literal["elasticsearch"] = "elasticsearch"
     elasticsearch_url: AnyHttpUrl = AnyHttpUrl("http://localhost:9200")
     elasticsearch_index: str = Field(default="rag_chunks", pattern=r"^[a-z0-9][a-z0-9_-]*$", max_length=255)
     elasticsearch_timeout_seconds: int = Field(default=10, gt=0)
+    query_max_length: int = Field(default=2000, gt=0)
     retrieval_mode: Literal["vector", "bm25", "hybrid"] = "vector"
     hybrid_fusion: Literal["rrf"] = "rrf"
     hybrid_rrf_k: int = Field(default=60, gt=0)
@@ -33,6 +43,8 @@ class Settings(BaseSettings):
     llm_api_key: SecretStr = SecretStr("")
     llm_model: str | None = Field(default=None, min_length=1)
     llm_timeout_seconds: int = Field(default=60, gt=0)
+    query_rewrite_enabled: bool = False
+    query_rewrite_timeout_ms: int = Field(default=2000, gt=0)
     rerank_enabled: bool = False
     rerank_provider: Literal["llm", "noop"] = "llm"
     rerank_top_n: int = Field(default=5, gt=0)

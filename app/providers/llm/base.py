@@ -13,6 +13,13 @@ class LLMProviderError(ServiceError):
 
 
 class LLMProvider(ABC):
+    async def chat_text(
+        self, *, system_prompt: str, user_payload: dict[str, Any], temperature: float,
+        max_tokens: int, timeout_seconds: float,
+    ) -> str:
+        """Return a plain-text completion when supported by this provider."""
+        raise NotImplementedError
+
     @abstractmethod
     async def chat_json(
         self,

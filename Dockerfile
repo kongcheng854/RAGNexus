@@ -5,7 +5,7 @@ WORKDIR /srv/ragnexus
 
 COPY pyproject.toml .
 COPY app ./app
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir ".[parsers]"
 
 COPY alembic.ini .
 COPY migrations ./migrations

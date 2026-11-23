@@ -27,9 +27,11 @@ async def search_chunks(
     statement = (
         select(
             Chunk.document_id, Chunk.id.label("chunk_id"), Chunk.title,
-            Chunk.content, (1.0 - distance).label("score"),
+            Chunk.content, Chunk.chunk_metadata.label("metadata"), (1.0 - distance).label("score"),
         )
+        .join(Document, Chunk.document_id == Document.id)
         .where(
+            Document.status == IndexStatus.SUCCESS,
             Chunk.tenant_id == tenant_id,
             Chunk.kb_id == kb_id,
             func.vector_dims(Chunk.embedding) == len(query_vector),
@@ -39,6 +41,13 @@ async def search_chunks(
     )
     rows = await session.execute(statement)
     return [ChunkMatch(**row) for row in rows.mappings()]
+
+
+async def has_indexed_chunks(session: AsyncSession, tenant_id: str, kb_ids: list[UUID]) -> bool:
+    visible = select(Chunk.id).join(Document, Chunk.document_id == Document.id).where(
+        Chunk.tenant_id == tenant_id, Chunk.kb_id.in_(kb_ids), Document.status == IndexStatus.SUCCESS,
+    )
+    return bool(await session.scalar(select(visible.exists())))
 
 
 async def delete_by_document_id(session: AsyncSession, document_id: UUID) -> None:
@@ -66,6 +75,6 @@ async def resolve_keyword_matches(
             seen.add(chunk.id)
             found.append(RerankCandidate(
                 document_id=chunk.document_id, chunk_id=chunk.id, title=chunk.title,
-                content=chunk.content, score=match.bm25_score,
+                content=chunk.content, score=match.bm25_score, metadata=chunk.chunk_metadata,
             ))
     return found

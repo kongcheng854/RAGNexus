@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from uuid import UUID
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 
 @dataclass(frozen=True)
 class ChunkToIndex:
@@ -11,7 +13,7 @@ class ChunkToIndex:
     document_id: UUID
     title: str
     content: str
-    chunk_metadata: dict[str, int]
+    chunk_metadata: dict
     embedding: list[float]
 
 
@@ -22,9 +24,14 @@ class ChunkMatch:
     title: str
     content: str
     score: float
+    metadata: dict | None = None
 
 
 class VectorStore(ABC):
+    def for_session(self, session: AsyncSession) -> "VectorStore":
+        """Stateless stores can be shared. Session-bound stores must rebind here."""
+        return self
+
     @property
     @abstractmethod
     def name(self) -> str:

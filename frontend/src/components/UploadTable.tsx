@@ -3,7 +3,7 @@ import type { UploadItem } from "../types/api";
 import { formatBytes } from "../utils/files";
 import { Button } from "./ui/button";
 
-const statusLabels = { pending: "等待上传", uploading: "正在索引", success: "上传成功", failed: "上传失败" };
+const statusLabels = { pending: "等待上传", uploading: "正在提交", success: "提交成功", failed: "上传失败" };
 
 export function UploadTable({ items, running, remove }: {
   items: UploadItem[]; running: boolean; remove: (id: string) => void;
@@ -28,7 +28,7 @@ export function UploadTable({ items, running, remove }: {
                   {item.status === "uploading" && <LoaderCircle size={14} className="animate-spin" />}
                   {statusLabels[item.status]}
                 </div>
-                {item.result && <><p className="mt-1.5 text-sm text-muted">已索引 {item.result.chunk_count} 个片段</p><p className="mt-1 break-all text-xs text-muted">ID {item.result.document_id}</p></>}
+                {item.result && <><p className="mt-1.5 text-sm text-muted">{item.result.status === 3 ? "已提交，正在后台索引" : `已索引 ${item.result.chunk_count} 个片段`}</p><p className="mt-1 break-all text-xs text-muted">ID {item.result.document_id}</p></>}
                 {item.error && <p className="mt-1.5 break-words text-sm text-[#b34636]">{item.error}</p>}
               </td>
               <td className="px-3 py-4 align-top"><Button size="icon" variant="ghost" disabled={running} onClick={() => remove(item.id)} aria-label={`移除 ${item.path}`}><Trash2 size={16} /></Button></td>

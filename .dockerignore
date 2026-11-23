@@ -3,6 +3,7 @@
 .uv-cache
 .uv-python
 .git
+data/uploads/
 **/__pycache__
 **/*.egg-info
 build

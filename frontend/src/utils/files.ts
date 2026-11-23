@@ -15,6 +15,14 @@ export function makeUploadItems(files: File[]): UploadItem[] {
   }));
 }
 
+export function isBinaryUploadFile(file: File): boolean {
+  return /\.(pdf|docx)$/i.test(file.name);
+}
+
+export function isSupportedUploadFile(file: File): boolean {
+  return /\.(txt|md)$/i.test(file.name) || isBinaryUploadFile(file);
+}
+
 export async function readDocument(file: File): Promise<{ title: string; content: string }> {
   if (!/\.(txt|md)$/i.test(file.name)) throw new Error("仅支持 .txt 和 .md 文件");
   if (file.size > 400_003) throw new Error("文件过大，正文最多支持 100,000 个字符");

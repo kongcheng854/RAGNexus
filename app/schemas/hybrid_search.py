@@ -32,12 +32,19 @@ class KeywordMatch(BaseModel):
     bm25_score: Annotated[float, Field(allow_inf_nan=False)]
 
 
+class RetrievedChunkMetadata(BaseModel):
+    heading_path: str | None = None
+    chunk_type: str | None = None
+    table_part: int | None = None
+
+
 class RetrievalEvidence(BaseModel):
     document_id: UUID
     chunk_id: UUID
     title: str
     content: str
     score: float
+    metadata: RetrievedChunkMetadata | None = None
     vector_score: float | None = None
     bm25_score: float | None = None
     vector_rank: int | None = None
@@ -53,7 +60,20 @@ class RetrievalEvidence(BaseModel):
         return result
 
 
+class KnowledgeBaseRetrievalStatus(BaseModel):
+    status: Literal["ok", "degraded", "failed"]
+    error: str | None = None
+    degraded_reason: str | None = None
+
+
 class RetrievalDetails(BaseModel):
+    failed_kb_ids: list[UUID] | None = None
+    partial_kb_success: bool = False
+    per_kb_metadata: dict[UUID, KnowledgeBaseRetrievalStatus] | None = None
+    empty_reason: Literal["no_indexed_chunks", "no_chunks_matched"] | None = None
+    multi_kb: bool | None = None
+    kb_count: int | None = None
+    per_kb_top_k: int | None = None
     mode: RetrievalMode
     fusion: Literal["rrf"] | None = None
     rrf_k: int | None = None
@@ -66,3 +86,10 @@ class RetrievalDetails(BaseModel):
     fused_count: int
     degraded: bool = False
     degraded_reason: str | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_details(self, handler):
+        data = handler(self)
+        if not self.multi_kb:
+            data.pop("partial_kb_success", None)
+        return data

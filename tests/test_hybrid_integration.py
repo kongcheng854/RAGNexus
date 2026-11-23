@@ -15,6 +15,8 @@ from app.core.auth import TenantContext
 from app.api.v1.deps import get_current_tenant
 from app.models import Chunk, Document, RetrievalLog
 from app.main import create_app
+from tests.rate_support import isolated_rates
+from tests.indexing_support import upload_and_index
 from app.reindex_keyword import reindex
 from app.providers.embedding.base import EmbeddingProvider
 from app.providers.keyword_search.base import KeywordSearchError
@@ -58,18 +60,22 @@ class HybridIntegrationTests(unittest.IsolatedAsyncioTestCase):
             hybrid_vector_top_k=1, hybrid_bm25_top_k=10, hybrid_top_n=5,
         )
         app = create_app(settings)
+        isolated_rates(app, self)
         app.dependency_overrides[get_embedding_provider] = TestEmbedding
         app.dependency_overrides[get_rerank_provider] = lambda: LLMRerankProvider(
             TestLLM(), chunk_max_chars=1000, temperature=0,
         )
         tenant = "test-" + uuid4().hex
         current_tenant = tenant
-        app.dependency_overrides[get_current_tenant] = lambda: TenantContext(current_tenant, "test")
+        app.dependency_overrides[get_current_tenant] = lambda: TenantContext(current_tenant, "test", plan="pro")
         async with app.router.lifespan_context(app):
             keyword = app.state.keyword_provider
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test/api/v1/",
             ) as client:
+                async def upload(body):
+                    return await upload_and_index(app, client, body, embedding=TestEmbedding(), keyword=keyword)
+
                 async def create(scope):
                     nonlocal current_tenant
                     current_tenant = scope
@@ -81,17 +87,17 @@ class HybridIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 kb_id = await create(tenant)
                 scope = {"tenant_id": tenant, "kb_id": kb_id}
                 for title, content in (("语义片段", "语义相关文档"), ("错误码条款", "ZX999 表示订单校验失败")):
-                    uploaded = await client.post("documents/upload", json=scope | {"title": title, "content": content})
+                    uploaded = await upload(scope | {"title": title, "content": content})
                     self.assertEqual(uploaded.status_code, 200, uploaded.text)
 
                 other_kb = await create(tenant + "-other")
-                other = await client.post("documents/upload", json={
+                other = await upload({
                     "tenant_id": tenant + "-other", "kb_id": other_kb,
                     "title": "跨租户", "content": "ZX999 其他租户文档",
                 })
                 other.raise_for_status()
                 current_tenant = tenant
-                query = scope | {"user_id": "test", "query": "ZX999"}
+                query = scope | {"profile": "custom", "user_id": "test", "query": "ZX999"}
                 result = await client.post("rag/retrieve", json=query)
                 data = result.raise_for_status().json()["data"]
                 details = data["metadata"]["retrieval"]
@@ -101,8 +107,8 @@ class HybridIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(details["fused_count"], 2)
                 self.assertEqual({chunk["retrieval_source"] for chunk in data["retrieved_chunks"]}, {"vector", "bm25"})
                 lexical = next(c for c in data["retrieved_chunks"] if c["retrieval_source"] == "bm25")
-                self.assertIsNone(lexical["vector_score"])
-                self.assertIsNone(lexical["vector_rank"])
+                self.assertIsNone(lexical.get("vector_score"))
+                self.assertIsNone(lexical.get("vector_rank"))
                 self.assertGreater(lexical["bm25_score"], 0)
                 self.assertAlmostEqual(lexical["score"], 1 / 61)
                 self.assertNotIn("context_text", data)
@@ -138,8 +144,10 @@ class HybridIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(bm25_failed.status_code, 503)
 
                 with patch.object(TestEmbedding, "embed", side_effect=RuntimeError("vector unavailable")):
-                    failed_vector = await client.post("rag/retrieve", json=query)
-                    self.assertEqual(failed_vector.status_code, 500, failed_vector.text)
+                    fallback = (await client.post("rag/retrieve", json=query)).raise_for_status().json()["data"]
+                    self.assertEqual(fallback["metadata"]["retrieval"]["degraded_reason"], "vector search failed")
+                    self.assertEqual(fallback["retrieved_chunks"][0]["chunk_id"], lexical["chunk_id"])
+                    self.assertEqual(fallback["retrieved_chunks"][0]["score"], lexical["bm25_score"])
 
                 original_add = keyword.add_chunks
                 async def fail_after_write(chunks):
@@ -147,10 +155,10 @@ class HybridIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     raise KeywordSearchError("partial failure")
 
                 with patch.object(keyword, "add_chunks", side_effect=fail_after_write):
-                    failed = await client.post("documents/upload", json=scope | {
+                    failed = await upload(scope | {
                         "title": "回滚测试", "content": "ZX999 回滚文档",
                     })
-                self.assertEqual(failed.status_code, 503, failed.text)
+                self.assertEqual(failed.raise_for_status().json()["data"]["status"], 2)
                 failed_id = UUID(failed.json()["data"]["document_id"])
                 async with app.state.session_factory() as session:
                     self.assertEqual((await session.get(Document, failed_id)).status, 2)
@@ -161,10 +169,10 @@ class HybridIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 with patch.object(keyword, "add_chunks", side_effect=fail_after_write), patch.object(
                     keyword, "delete_by_document_id", side_effect=KeywordSearchError("cleanup unavailable"),
                 ):
-                    ghost = await client.post("documents/upload", json=scope | {
+                    ghost = await upload(scope | {
                         "title": "残留测试", "content": "ZX999 绝不能返回的残留片段",
                     })
-                self.assertEqual(ghost.status_code, 503, ghost.text)
+                self.assertEqual(ghost.raise_for_status().json()["data"]["status"], 2)
                 clean = await client.post("rag/retrieve", json=query)
                 clean_data = clean.raise_for_status().json()["data"]
                 self.assertTrue(all("残留" not in c["content"] for c in clean_data["retrieved_chunks"]))
@@ -189,10 +197,9 @@ class HybridIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(rows), 2)
 
                 settings.retrieval_mode = "vector"
-                with patch.object(keyword, "add_chunks", side_effect=AssertionError("vector upload must skip ES")):
-                    legacy_upload = await client.post("documents/upload", json=scope | {
-                        "title": "历史文件", "content": "ZX999 向量模式新增文档",
-                    })
+                legacy_upload = await upload(scope | {
+                    "title": "历史文件", "content": "ZX999 向量模式新增文档",
+                })
                 legacy_upload.raise_for_status()
                 with patch("app.reindex_keyword.Settings", return_value=settings):
                     await reindex(tenant, UUID(kb_id))

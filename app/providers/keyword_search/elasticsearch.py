@@ -126,7 +126,7 @@ class ElasticsearchKeywordSearchProvider(KeywordSearchProvider):
     async def delete_by_document_id(self, document_id: UUID) -> None:
         result = await self._request(
             "POST", f"{self.index}/_delete_by_query",
-            params={"refresh": "true", "conflicts": "proceed"},
+            params={"refresh": "true", "conflicts": "proceed", "ignore_unavailable": "true"},
             json={"query": {"term": {"document_id": str(document_id)}}},
         )
         if result.get("failures") or result.get("timed_out") or result.get("version_conflicts", 0):

@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from app.providers.keyword_search.base import KeywordSearchError
 from app.providers.keyword_search.elasticsearch import ElasticsearchKeywordSearchProvider, INDEX_MAPPING
-from app.schemas.hybrid_search import KeywordChunk, RetrievalOptions
+from app.schemas.hybrid_search import KeywordChunk, RetrievedChunkMetadata, RetrievalOptions
 from app.schemas.rerank import RerankCandidate
 from app.services.hybrid_search_service import reciprocal_rank_fusion
 
@@ -22,6 +22,7 @@ def candidate(score):
 class FusionTests(unittest.TestCase):
     def test_rrf_deduplicates_by_id_preserves_provenance_and_stable_ties(self):
         first, second, third = candidate(0.8), candidate(0.7), candidate(13.4)
+        second.metadata = RetrievedChunkMetadata(heading_path="手册/退款", chunk_type="table")
         bm25_second = second.model_copy(update={"score": 99.0})
         result = reciprocal_rank_fusion(
             [first, second, first], [bm25_second, third], rrf_k=60, top_n=3,
@@ -31,6 +32,7 @@ class FusionTests(unittest.TestCase):
         self.assertEqual((result[0].vector_score, result[0].bm25_score), (0.7, 99.0))
         self.assertEqual((result[0].vector_rank, result[0].bm25_rank), (2, 1))
         self.assertEqual(result[0].retrieval_source, "hybrid")
+        self.assertEqual(result[0].metadata, second.metadata)
         self.assertEqual(result[1].retrieval_source, "vector")
         self.assertEqual(result[2].retrieval_source, "bm25")
         self.assertEqual(reciprocal_rank_fusion([], [], rrf_k=60, top_n=20), [])
@@ -48,7 +50,8 @@ class ElasticsearchProviderTests(unittest.IsolatedAsyncioTestCase):
     async def test_mapping_bulk_filtering_and_partial_write_failure(self):
         chunk = KeywordChunk(
             tenant_id="tenant", kb_id=uuid4(), document_id=uuid4(), chunk_id=uuid4(),
-            title="标题", content="错误 ZX999", metadata={"position": 0}, created_at=datetime.now(timezone.utc),
+            title="标题", content="错误 ZX999", metadata={"position": 0, "chunk_type": "table",
+                "heading_path": "手册/错误", "table_part": 1}, created_at=datetime.now(timezone.utc),
         )
         calls = []
         ready = False
@@ -67,6 +70,7 @@ class ElasticsearchProviderTests(unittest.IsolatedAsyncioTestCase):
                 lines = [json.loads(line) for line in request.content.decode().splitlines()]
                 self.assertEqual(lines[0]["index"]["_id"], str(chunk.chunk_id))
                 self.assertEqual(lines[1]["chunk_id"], str(chunk.chunk_id))
+                self.assertEqual(lines[1]["metadata"], chunk.metadata)
                 self.assertNotIn("embedding", lines[1])
                 self.assertEqual(request.url.params["refresh"], "wait_for")
                 return httpx.Response(200, json={

@@ -8,3 +8,6 @@ __pycache__/
 build/
 dist/
 logs/
+eval/reports/
+eval/results/
+data/uploads/

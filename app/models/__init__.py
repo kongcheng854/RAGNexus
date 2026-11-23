@@ -5,6 +5,8 @@ from uuid import UUID
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     CheckConstraint,
+    false,
+    text,
     ForeignKeyConstraint,
     Index,
     SmallInteger,
@@ -35,6 +37,7 @@ class KnowledgeBase(Timestamps, Base):
     tenant_id: Mapped[str] = mapped_column(String(128))
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text)
+    settings: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}", nullable=False)
 
 
 class Document(Timestamps, Base):
@@ -45,6 +48,7 @@ class Document(Timestamps, Base):
             name="fk_documents_knowledge_base",
         ),
         UniqueConstraint("tenant_id", "kb_id", "id", name="uq_document_scope"),
+        Index("ix_documents_dispatch_pending", "updated_at", postgresql_where=text("dispatch_pending")),
         CheckConstraint("status IN (1, 2, 3)", name="ck_document_status"),
     )
 
@@ -52,6 +56,12 @@ class Document(Timestamps, Base):
     tenant_id: Mapped[str] = mapped_column(String(128))
     kb_id: Mapped[UUID] = mapped_column(Uuid)
     title: Mapped[str] = mapped_column(String(255))
+    content: Mapped[str] = mapped_column(Text, server_default="", nullable=False)
+    dispatch_pending: Mapped[bool] = mapped_column(server_default=false(), nullable=False)
+    source_file_path: Mapped[str | None] = mapped_column(Text)
+    source_filename: Mapped[str | None] = mapped_column(String(255))
+    parser_metadata: Mapped[dict | None] = mapped_column(JSONB)
+    reparse_pending: Mapped[bool] = mapped_column(server_default=false(), nullable=False)
     source_type: Mapped[str] = mapped_column(String(32))
     status: Mapped[int] = mapped_column(SmallInteger)
     error_message: Mapped[str | None] = mapped_column(Text)
@@ -86,14 +96,21 @@ class RetrievalLog(CreatedAt, Base):
             name="fk_retrieval_logs_knowledge_base",
         ),
         Index("ix_retrieval_logs_scope", "tenant_id", "kb_id"),
+        Index("ix_retrieval_logs_tenant_trace", "tenant_id", "trace_id", postgresql_where=text("trace_id IS NOT NULL")),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(128))
     kb_id: Mapped[UUID] = mapped_column(Uuid)
+    kb_ids: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True))
     user_id: Mapped[str] = mapped_column(String(128))
     query: Mapped[str] = mapped_column(Text)
+    trace_id: Mapped[str | None] = mapped_column(String(64))
+    profile: Mapped[str | None] = mapped_column(String(32))
+    effective_query: Mapped[str | None] = mapped_column(Text)
+    search_query: Mapped[str | None] = mapped_column(Text)
     retrieved_chunks: Mapped[list[dict]] = mapped_column(JSONB)
+    retrieval_metadata: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     top_k: Mapped[int]
     vector_store: Mapped[str] = mapped_column(String(32))
     latency_ms: Mapped[int]

@@ -1,12 +1,10 @@
-from abc import ABC, abstractmethod
+"""Compatibility imports for the former synchronous text-only parser."""
+
+from app.providers.parsers.base import DocumentParser
+
+__all__ = ["DocumentParser", "PlainTextParser"]
 
 
-class DocumentParser(ABC):
-    @abstractmethod
-    def parse(self, content: str) -> str:
-        raise NotImplementedError
-
-
-class PlainTextParser(DocumentParser):
+class PlainTextParser:
     def parse(self, content: str) -> str:
         return content.strip()

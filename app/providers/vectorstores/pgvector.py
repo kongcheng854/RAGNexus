@@ -12,6 +12,9 @@ class PgVectorStore(VectorStore):
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    def for_session(self, session: AsyncSession) -> "PgVectorStore":
+        return type(self)(session)
+
     async def add_chunks(self, chunks: list[ChunkToIndex]) -> None:
         await chunk_repository.add_chunks(self.session, chunks)
 

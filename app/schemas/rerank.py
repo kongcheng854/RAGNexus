@@ -1,4 +1,5 @@
 from typing import Annotated, Any
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -11,6 +12,8 @@ class RerankOptions(BaseModel):
 
 
 class RerankCandidate(RetrievalEvidence):
+    kb_id: UUID | None = None
+    kb_name: str | None = None
 
     def to_prompt(self, max_chars: int) -> dict[str, Any]:
         payload = {

@@ -15,23 +15,90 @@ services:
       timeout: 3s
       retries: 20
 
-  api:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  langfuse-db:
+    image: postgres:16-alpine
+    profiles: ["observability"]
+    environment:
+      POSTGRES_DB: langfuse
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:-}
+    volumes:
+      - langfuse_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  langfuse:
+    image: langfuse/langfuse:2
+    profiles: ["observability"]
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_DB_PASSWORD:-}@langfuse-db:5432/langfuse
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-}
+      SALT: ${LANGFUSE_SALT:-}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-}
+      TELEMETRY_ENABLED: "false"
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+
+  migrate:
     build: .
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/rag_center
-      ELASTICSEARCH_URL: http://elasticsearch:9200
     depends_on:
       postgres:
         condition: service_healthy
-    command:
-      - sh
-      - -ec
-      - alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log
+    command: ["alembic", "upgrade", "head"]
+
+  api:
+    build: .
+    env_file: .env
+    environment: &app_env
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/rag_center
+      DOCUMENT_STORAGE_PATH: /srv/ragnexus/data/uploads
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      LANGFUSE_HOST: ${LANGFUSE_DOCKER_HOST:-http://langfuse:3000}
+    depends_on: &app_dependencies
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
       - api_logs:/srv/ragnexus/logs
+      - document_uploads:/srv/ragnexus/data/uploads
+
+  worker:
+    build: .
+    env_file: .env
+    environment: *app_env
+    volumes:
+      - document_uploads:/srv/ragnexus/data/uploads
+    depends_on: *app_dependencies
+    command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info"]
 
   elasticsearch:
     build: ./docker/elasticsearch
@@ -51,5 +118,8 @@ services:
 
 volumes:
   postgres_data:
+  langfuse_data:
   api_logs:
+  document_uploads:
+  redis_data:
   es_data:

@@ -26,6 +26,11 @@ def raise_error(error: ErrorCode, *, detail: str | None = None) -> NoReturn:
     raise ServiceError(error, detail=detail)
 
 
+class DocumentParseError(ServiceError):
+    def __init__(self, detail: str) -> None:
+        super().__init__(ErrorCode.DOCUMENT_PARSE_FAILED, detail=detail)
+
+
 class EmbeddingError(ServiceError):
     def __init__(
         self, detail: str | None = None, *, error: ErrorCode = ErrorCode.LLM_ERROR

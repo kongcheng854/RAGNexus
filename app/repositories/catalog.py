@@ -9,13 +9,27 @@ from app.models import Chunk, Document, IndexStatus, KnowledgeBase, RetrievalLog
 
 
 async def get_knowledge_base(
-    session: AsyncSession, tenant_id: str, kb_id: UUID
+    session: AsyncSession, tenant_id: str, kb_id: UUID, *, lock: bool = False
 ) -> KnowledgeBase | None:
-    return await session.scalar(
-        select(KnowledgeBase).where(
-            KnowledgeBase.id == kb_id, KnowledgeBase.tenant_id == tenant_id
-        )
+    stmt = select(KnowledgeBase).where(KnowledgeBase.id == kb_id, KnowledgeBase.tenant_id == tenant_id)
+    return await session.scalar(stmt.with_for_update() if lock else stmt)
+
+
+async def get_knowledge_bases(
+    session: AsyncSession, tenant_id: str, kb_ids: Sequence[UUID],
+) -> dict[UUID, KnowledgeBase]:
+    rows = await session.scalars(select(KnowledgeBase).where(
+        KnowledgeBase.tenant_id == tenant_id, KnowledgeBase.id.in_(kb_ids),
+    ))
+    return {kb.id: kb for kb in rows}
+
+
+async def replace_knowledge_base_settings(session: AsyncSession, kb_id: UUID, settings: dict) -> bool:
+    updated = await session.scalar(
+        update(KnowledgeBase).where(KnowledgeBase.id == kb_id)
+        .values(settings=settings).returning(KnowledgeBase.id)
     )
+    return updated is not None
 
 
 async def add_knowledge_base(session: AsyncSession, knowledge_base: KnowledgeBase) -> None:
@@ -28,13 +42,10 @@ async def add_document(session: AsyncSession, document: Document) -> None:
     await session.flush()
 
 
-async def update_document_status(
-    session: AsyncSession, document_id: UUID, status: IndexStatus, error_message: str | None = None
-) -> None:
+async def fail_pending_document(session: AsyncSession, document_id: UUID, message: str) -> None:
     await session.execute(
-        update(Document)
-        .where(Document.id == document_id)
-        .values(status=status, error_message=error_message)
+        update(Document).where(Document.id == document_id, Document.status == IndexStatus.PROCESSING)
+        .values(status=IndexStatus.FAILED, error_message=message)
     )
 
 
@@ -53,13 +64,12 @@ async def fetch_knowledge_tree(
         KnowledgeBase.tenant_id, KnowledgeBase.id.label("kb_id"),
         KnowledgeBase.name, KnowledgeBase.description,
         KnowledgeBase.created_at.label("kb_created_at"),
-        Document.id.label("document_id"), Document.title,
+        Document.id.label("document_id"), Document.title, Document.status, Document.error_message,
         Document.created_at.label("document_created_at"),
         func.coalesce(counts.c.chunk_count, 0).label("chunk_count"),
     ).outerjoin(Document, and_(
         Document.kb_id == KnowledgeBase.id,
         Document.tenant_id == KnowledgeBase.tenant_id,
-        Document.status == IndexStatus.SUCCESS,
     )).outerjoin(counts, counts.c.document_id == Document.id).where(
         KnowledgeBase.tenant_id == tenant_id
     )

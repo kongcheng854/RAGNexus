@@ -5,13 +5,15 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
 import httpx
 from sqlalchemy import select
 
-from app.api.dependencies import get_embedding_provider, get_vector_store, SessionDependency
+from tests.rate_support import isolated_rates
+from tests.indexing_support import upload_and_index
+from app.api.dependencies import get_embedding_provider
 from app.core.config import Settings
 from app.core.auth import TenantContext
 from app.api.v1.deps import get_current_tenant
@@ -21,6 +23,7 @@ from app.main import create_app
 from app.models import Chunk, Document, RetrievalLog
 from app.providers.embedding.base import EmbeddingProvider
 from app.providers.vectorstores.pgvector import PgVectorStore
+from app.utils.text_splitter import CharacterTextSplitter
 
 
 DATABASE_URL = os.getenv("RAGNEXUS_TEST_DATABASE_URL")
@@ -37,10 +40,6 @@ class FailingVectorStore(PgVectorStore):
         raise EmbeddingError("simulated failure after writing chunks")
 
 
-def get_failing_store(session: SessionDependency):
-    return FailingVectorStore(session)
-
-
 @unittest.skipUnless(DATABASE_URL, "set RAGNEXUS_TEST_DATABASE_URL to a migrated test database")
 class IntegrationTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
@@ -53,9 +52,10 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         app = create_app(Settings(database_url=DATABASE_URL, top_k=2, log_dir=Path(directory.name)))
+        isolated_rates(app, self)
         app.dependency_overrides[get_embedding_provider] = FixedEmbeddingProvider
         tenant = f"test-{uuid4()}"
-        app.dependency_overrides[get_current_tenant] = lambda: TenantContext(tenant, "test")
+        app.dependency_overrides[get_current_tenant] = lambda: TenantContext(tenant, "test", plan="pro")
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test/api/v1/"
@@ -67,21 +67,19 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
                 kb_id = created.json()["data"]["kb_id"]
                 upload = {"tenant_id": tenant, "kb_id": kb_id, "title": "规则"}
                 for text in ("七天内可以退款", "配送需要三天"):
-                    response = await client.post("documents/upload", json=upload | {"content": text})
+                    response = await upload_and_index(app, client, upload | {"content": text}, embedding=FixedEmbeddingProvider())
                     self.assertEqual(response.status_code, 200, response.text)
                     self.assertEqual(response.json()["data"]["status"], 1)
 
-                app.dependency_overrides[get_vector_store] = get_failing_store
-                failed = await client.post(
-                    "documents/upload", json=upload | {"content": "退款内容不应进入结果"}
+                failed = await upload_and_index(
+                    app, client, upload | {"content": "退款内容不应进入结果"},
+                    embedding=FixedEmbeddingProvider(), store=FailingVectorStore,
                 )
-                self.assertEqual(failed.status_code, 502, failed.text)
-                self.assertEqual(failed.json()["code"], ErrorCode.LLM_ERROR)
+                failed.raise_for_status()
                 self.assertEqual(failed.json()["data"]["status"], 2)
                 failed_id = UUID(failed.json()["data"]["document_id"])
-                del app.dependency_overrides[get_vector_store]
 
-                query = {"tenant_id": tenant, "kb_id": kb_id, "user_id": "test", "query": "如何退款"}
+                query = {"profile": "custom", "tenant_id": tenant, "kb_id": kb_id, "user_id": "test", "query": "如何退款"}
                 retrieved = await client.post("rag/retrieve", json=query)
                 self.assertEqual(retrieved.status_code, 200, retrieved.text)
                 data = retrieved.json()["data"]
@@ -95,7 +93,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([row["score"] for row in data["retrieved_chunks"]], [1.0, 0.0])
 
                 other_tenant = query | {"tenant_id": f"other-{tenant}"}
-                app.dependency_overrides[get_current_tenant] = lambda: TenantContext(other_tenant["tenant_id"], "test")
+                app.dependency_overrides[get_current_tenant] = lambda: TenantContext(other_tenant["tenant_id"], "test", plan="pro")
                 denied = await client.post("rag/retrieve", json=other_tenant)
                 self.assertEqual(denied.status_code, 404, denied.text)
                 self.assertEqual(denied.json()["code"], ErrorCode.KNOWLEDGE_BASE_NOT_FOUND)
@@ -114,6 +112,49 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(saved_log.latency_ms, data["metadata"]["latency_ms"])
                 self.assertEqual(len(saved_log.retrieved_chunks), 2)
 
+    async def test_upload_keeps_structured_chunks_in_both_indexes(self):
+        with TemporaryDirectory() as directory:
+            settings = Settings(database_url=DATABASE_URL, log_dir=Path(directory),
+                                chunk_size=38, chunk_overlap=4, table_max_rows_per_chunk=1)
+            app = create_app(settings)
+            isolated_rates(app, self)
+            tenant = str(uuid4())
+            app.dependency_overrides[get_current_tenant] = lambda: TenantContext(tenant, "test", plan="pro")
+            keyword = AsyncMock()
+            app.dependency_overrides[get_embedding_provider] = FixedEmbeddingProvider
+            async with app.router.lifespan_context(app), httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test/api/v1/"
+            ) as client:
+                kb = (await client.post("knowledge-bases/create", json={"name": "表格"})).raise_for_status().json()["data"]["kb_id"]
+                rows = [f"| 场景{i} | {i}天 |" for i in range(4)]
+                doc = "\n".join(["# 手册", "## 售后", "开篇", "| 类别 | 时效 |", "|---|---|", *rows, "尾注"])
+                for title in ("规则.MD", "规则.txt"):
+                    result = await upload_and_index(app, client, {"kb_id": kb, "title": title, "content": doc},
+                                                    embedding=FixedEmbeddingProvider(), keyword=keyword)
+                    detail = result.raise_for_status().json()["data"]
+                    self.assertEqual(detail["status"], 1)
+                    sent = keyword.add_chunks.await_args.args[0]
+                    async with app.state.session_factory() as session:
+                        saved = (await session.scalars(select(Chunk).where(Chunk.document_id == UUID(detail["document_id"])))).all()
+                    by_id = {chunk.id: chunk for chunk in saved}
+                    self.assertEqual(len(saved), detail["chunk_count"])
+                    for i, chunk in enumerate(sent):
+                        self.assertEqual((chunk.content, chunk.metadata), (by_id[chunk.chunk_id].content, by_id[chunk.chunk_id].chunk_metadata))
+                        self.assertEqual((chunk.metadata["position"], chunk.metadata["chunk_index"], chunk.metadata["source_type"]), (i, i, "text"))
+                    if title.endswith(".MD"):
+                        self.assertTrue(all(c.metadata["heading_path"] == "手册/售后" for c in sent))
+                        response = await client.post("rag/retrieve", json={
+                            "kb_id": kb, "user_id": "test", "profile": "speed", "query": "售后",
+                        })
+                        hits = response.raise_for_status().json()["data"]["retrieved_chunks"]
+                        self.assertTrue(hits)
+                        self.assertTrue(all(hit["metadata"]["heading_path"] == "手册/售后" for hit in hits))
+                        tables = [c for c in sent if c.metadata["chunk_type"] == "table"]
+                        self.assertEqual([c.metadata["table_part"] for c in tables], [1, 2, 3, 4])
+                        self.assertEqual([c.content for c in tables], ["【表头】类别 | 时效\n" + row for row in rows])
+                    else:
+                        self.assertEqual([c.content for c in sent], CharacterTextSplitter(38, 4).split(doc))
+
     async def test_rerank_http_contract_and_degraded_retrieval_log(self):
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -124,6 +165,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
             rerank_enabled=True, rerank_top_n=1, rerank_max_candidates=2, rerank_chunk_max_chars=5,
         )
         app = create_app(settings)
+        isolated_rates(app, self)
         chat_requests = []
         chat_failure = False
 
@@ -161,8 +203,8 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         tenant = f"test-{uuid4()}"
-        app.dependency_overrides[get_current_tenant] = lambda: TenantContext(tenant, "test")
-        with patch("app.main.model_client", side_effect=model_client):
+        app.dependency_overrides[get_current_tenant] = lambda: TenantContext(tenant, "test", plan="pro")
+        with patch("app.main.model_client", side_effect=model_client), patch("app.providers.index_clients.model_client", side_effect=model_client):
             async with app.router.lifespan_context(app):
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=app), base_url="http://test/api/v1/"
@@ -171,12 +213,12 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
                     created = await client.post("knowledge-bases/create", json=scope | {"name": "规则"})
                     scope["kb_id"] = created.raise_for_status().json()["data"]["kb_id"]
                     for content in ("第一段退款规则全文", "第二段退款规则全文", "配送规则全文"):
-                        uploaded = await client.post(
-                            "documents/upload", json=scope | {"title": "规则", "content": content},
+                        uploaded = await upload_and_index(
+                            app, client, scope | {"title": "规则", "content": content},
                         )
-                        uploaded.raise_for_status()
+                        self.assertEqual(uploaded.raise_for_status().json()["data"]["status"], 1)
 
-                    search = scope | {"user_id": "test", "query": "按规则能否退款", "top_k": 3}
+                    search = scope | {"profile": "custom", "user_id": "test", "query": "按规则能否退款", "top_k": 3}
                     ranked = await client.post("rag/retrieve", json=search)
                     data = ranked.raise_for_status().json()["data"]
                     self.assertNotIn("context_text", data)

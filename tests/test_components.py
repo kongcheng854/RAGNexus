@@ -55,7 +55,11 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
             "/api/v1/knowledge-bases/tree",
             "/api/v1/auth/me",
             "/api/v1/documents/upload",
+            "/api/v1/documents/{document_id}",
+            "/api/v1/documents/{document_id}/reindex",
+            "/api/v1/knowledge-bases/{kb_id}",
             "/api/v1/rag/retrieve",
+            "/api/v1/rag/feedback",
         })
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(

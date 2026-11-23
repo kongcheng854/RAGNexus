@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DocumentResult, UploadItem } from "../types/api";
+import { AuthConfigurationError } from "../lib/http";
 import { readDocument, makeUploadItems } from "./files";
 import { uploadSequentially } from "./upload";
 
@@ -35,10 +36,36 @@ describe("document reading", () => {
 });
 
 describe("sequential upload", () => {
+  it("keeps the remaining queue pending when the key is rejected", async () => {
+    const items = makeUploadItems(["one", "two", "three"].map((name) => file(name + ".txt", name)));
+    const sent: string[] = [];
+    await expect(uploadSequentially(items, async (document) => {
+      sent.push(document.title);
+      if (sent.length === 2) throw new AuthConfigurationError();
+      return { document_id: "doc", kb_id: "kb", status: 1, chunk_count: 1 };
+    }, (id, patch) => Object.assign(items.find((item) => item.id === id)!, patch), async () => { throw new Error("unexpected binary"); }))
+      .rejects.toBeInstanceOf(AuthConfigurationError);
+    expect(sent).toEqual(["one.txt", "two.txt"]);
+    expect(items.map((item) => item.status)).toEqual(["success", "pending", "pending"]);
+  });
+
+  it("sends Word and PDF files intact without decoding them", async () => {
+    const items = makeUploadItems([file("policy.DOCX", "word"), file("receipt.pdf", "pdf")]);
+    const sent: File[] = [];
+    await uploadSequentially(items, async () => { throw new Error("unexpected text"); },
+      (id, patch) => Object.assign(items.find(item => item.id === id)!, patch),
+      async (binary) => {
+        sent.push(binary);
+        return { document_id: "doc", kb_id: "kb", status: 3, chunk_count: 0 };
+      });
+    expect(sent).toEqual(items.map(item => item.file));
+    expect(items.every(item => item.status === "success")).toBe(true);
+  });
+
   it("awaits each request and continues through validation and server errors", async () => {
     const items = makeUploadItems([
       file("first.txt", "first"),
-      file("unsupported.pdf", "pdf"),
+      file("unsupported.zip", "zip"),
       file("failed.txt", "failed"),
       file("last.md", "last"),
     ]);
@@ -57,7 +84,7 @@ describe("sequential upload", () => {
       inFlight--;
       if (document.title === "failed.txt") throw new Error("索引失败");
       return result;
-    }, (id, patch) => { updates[id] = { ...updates[id], ...patch }; });
+    }, (id, patch) => { updates[id] = { ...updates[id], ...patch }; }, async () => { throw new Error("unexpected binary"); });
     expect(maximum).toBe(1);
     expect(sent).toEqual(["first.txt", "failed.txt", "last.md"]);
     expect(items.map((item) => updates[item.id].status)).toEqual([

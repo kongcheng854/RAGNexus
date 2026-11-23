@@ -1,0 +1,55 @@
+{
+  "name": "ecommerce_retrieval",
+  "kb_id": null,
+  "default_profile": "balanced",
+  "cases": [
+    {
+      "id": "seed_coupon_stack",
+      "question": "同一笔订单可以同时享受满减和店铺优惠券吗？",
+      "ground_truth": "同一订单不可同时使用满减活动与店铺优惠券，二者择一适用。",
+      "source": {
+        "document": "data/ecommerce/优惠与积分.md"
+      }
+    },
+    {
+      "id": "seed_points",
+      "question": "积分什么时候到账，取消订单还有积分吗？",
+      "ground_truth": "积分在订单确认收货后入账，取消订单不发放积分。",
+      "source": {
+        "document": "data/ecommerce/优惠与积分.md"
+      }
+    },
+    {
+      "id": "seed_dispatch",
+      "question": "普通现货商品付完款，最晚多久发货？",
+      "ground_truth": "普通现货商品付款后两个工作日内发货。",
+      "source": {
+        "document": "data/ecommerce/发货与配送.md"
+      }
+    },
+    {
+      "id": "seed_address",
+      "question": "订单发货前后，分别怎么修改收货地址？",
+      "ground_truth": "订单发货前可以修改收货地址，发货后须联系在线客服。",
+      "source": {
+        "document": "data/ecommerce/发货与配送.md"
+      }
+    },
+    {
+      "id": "seed_refund_window",
+      "question": "订单完成后，多少天内可以申请退款？",
+      "ground_truth": "订单完成后七天内可申请退款。",
+      "source": {
+        "document": "data/ecommerce/退款规则.md"
+      }
+    },
+    {
+      "id": "seed_refund_arrival",
+      "question": "退款审核通过后钱退到哪里，多久能收到？",
+      "ground_truth": "退款审核通过后，款项将在三个工作日内退回原支付账户。",
+      "source": {
+        "document": "data/ecommerce/退款规则.md"
+      }
+    }
+  ]
+}

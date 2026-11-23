@@ -38,11 +38,12 @@ async def reindex(tenant_id: str | None, kb_id: UUID | None) -> None:
                     statement = statement.where(Chunk.tenant_id == tenant_id)
                 if kb_id is not None:
                     statement = statement.where(Chunk.kb_id == kb_id)
-                async with sessions() as session:
-                    rows = (await session.execute(statement)).mappings().all()
-                if not rows:
-                    break
-                await provider.add_chunks([KeywordChunk.model_validate(dict(row)) for row in rows])
+                async with sessions() as session, session.begin():
+                    # Serialize backfill writes with document deletion and reindex.
+                    rows = (await session.execute(statement.with_for_update(read=True, of=Document))).mappings().all()
+                    if not rows:
+                        break
+                    await provider.add_chunks([KeywordChunk.model_validate(dict(row)) for row in rows])
                 cursor = rows[-1]["chunk_id"]
                 count += len(rows)
                 print(f"Indexed {count} chunks", flush=True)

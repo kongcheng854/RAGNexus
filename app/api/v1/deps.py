@@ -21,7 +21,7 @@ async def get_current_tenant(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
 ) -> TenantContext:
     if not request.app.state.settings.auth_enabled:
-        return TenantContext(tenant_id="tenant_demo", tenant_name="演示租户")
+        return TenantContext(tenant_id="tenant_demo", tenant_name="演示租户", plan="pro")
     if credentials is None:
         raise AppError(ErrorCode.UNAUTHORIZED)
     tenant = await authenticate_api_key(session, credentials.credentials)

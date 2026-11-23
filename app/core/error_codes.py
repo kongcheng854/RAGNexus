@@ -14,7 +14,7 @@ class ErrorCode(IntEnum):
 
     API_REQUEST_ERROR = (20001, "请求失败", 400)
     API_TIMEOUT = (20002, "请求超时", 408)
-    API_RATE_LIMIT = (20003, "调用频率超限，请稍后再试", 429)
+    API_RATE_LIMIT = (20005, "调用频率超限，请稍后再试", 429)
     PARAM_ERROR = (20004, "请求参数有误", 422)
     UNAUTHORIZED = (20010, "API Key 无效或未提供", 401)
     FORBIDDEN = (20006, "权限不足", 403)
@@ -24,12 +24,21 @@ class ErrorCode(IntEnum):
     PAYLOAD_TOO_LARGE = (20012, "请求内容过大", 413)
     UNSUPPORTED_MEDIA_TYPE = (20011, "请求内容格式不受支持", 415)
 
+    FEATURE_NOT_ALLOWED = (20013, "当前套餐不支持所选检索预设或功能", 403)
+    QUOTA_EXCEEDED = (20014, "已达到当前套餐配额", 429)
+
+    FEEDBACK_UNAVAILABLE = (20020, "反馈暂时无法保存，请检查 Langfuse 服务", 503)
+    FEEDBACK_TRACE_MISMATCH = (20021, "检索记录与追踪标识不匹配或无权访问", 403)
+    DOCUMENT_PARSE_FAILED = (20023, "文档解析失败", 422)
+    FEEDBACK_INVALID_SCORE = (20022, "评分必须是 1 至 5 的整数", 422)
+
     DB_ERROR = (30001, "数据库操作失败", 500)
     DATA_DUPLICATE = (30002, "数据已存在", 409)
     DATA_CONFLICT = (30003, "数据与当前状态冲突", 409)
     DB_UNAVAILABLE = (30004, "存储服务暂不可用，请稍后再试", 503)
     DB_TIMEOUT = (30005, "存储服务响应超时，请稍后再试", 503)
     KEYWORD_SEARCH_ERROR = (30006, "关键词索引服务暂不可用", 503)
+    RETRIEVAL_FAILED = (30007, "检索暂时不可用，请稍后再试", 503)
 
     LLM_ERROR = (40000, "模型调用失败", 502)
     LLM_TIMEOUT = (40001, "模型响应超时", 504)

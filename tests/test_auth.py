@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import httpx
@@ -24,13 +24,22 @@ from app.core.logging import EventFormatter
 from app.main import create_app
 from app.models import ApiKey, KnowledgeBase, RetrievalLog, Tenant
 from app.providers.embedding.base import EmbeddingProvider
+from tests.rate_support import isolated_rates
+from tests.indexing_support import upload_and_index
 from scripts.create_tenant import main as tenant_cli
 from scripts.create_api_key import main as key_cli
 
 
 DATABASE_URL = os.getenv("RAGNEXUS_TEST_DATABASE_URL")
 OPERATIONS = [
+    ("POST", "/rag/feedback", {"trace_id": "trace", "score": 4}),
     ("GET", "/auth/me", None),
+    ("GET", f"/knowledge-bases/{uuid4()}", None),
+    ("PATCH", f"/knowledge-bases/{uuid4()}", {"name": "new"}),
+    ("DELETE", f"/knowledge-bases/{uuid4()}", None),
+    ("GET", f"/documents/{uuid4()}", None),
+    ("DELETE", f"/documents/{uuid4()}", None),
+    ("POST", f"/documents/{uuid4()}/reindex", None),
     ("GET", "/knowledge-bases/tree", None),
     ("POST", "/knowledge-bases/create", {"name": "test"}),
     ("POST", "/documents/upload", {"kb_id": str(uuid4()), "title": "test", "content": "text"}),
@@ -54,7 +63,11 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_bearer_rejected_for_all_operations_without_database(self):
         with TemporaryDirectory() as directory:
             app = create_app(Settings(auth_enabled=True, log_dir=Path(directory)))
-            schemas = app.openapi()["components"]["schemas"]
+            spec = app.openapi()
+            upload_types = spec["paths"]["/api/v1/documents/upload"]["post"]["requestBody"]["content"]
+            self.assertEqual(set(upload_types), {"application/json", "multipart/form-data"})
+            self.assertEqual(upload_types["multipart/form-data"]["schema"]["required"], ["file", "kb_id"])
+            schemas = spec["components"]["schemas"]
             for name in ("KnowledgeBaseCreate", "DocumentUpload", "RetrievalRequest"):
                 self.assertNotIn("tenant_id", schemas[name]["properties"])
             async with app.router.lifespan_context(app):
@@ -71,16 +84,20 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
     async def test_disabled_auth_uses_fixed_placeholder_tenant(self):
         with TemporaryDirectory() as directory:
             app = create_app(Settings(auth_enabled=False, log_dir=Path(directory)))
+            isolated_rates(app, self)
+            self.enterContext(patch("app.api.v1.routes.auth.kb_count", new_callable=AsyncMock, return_value=0))
             async with app.router.lifespan_context(app):
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=app), base_url="http://test/api/v1",
                 ) as client:
                     response = await client.get("/auth/me", headers={"Authorization": "Bearer invalid"})
                     self.assertEqual(response.status_code, 200)
-                    self.assertEqual(response.json()["data"], {
-                        "tenant_id": "tenant_demo", "tenant_name": "演示租户",
-                        "key_prefix": None, "key_name": None,
-                    })
+                    data = response.json()["data"]
+                    self.assertEqual((data["tenant_id"], data["plan"]), ("tenant_demo", "pro"))
+                    self.assertIsNone(data["key_prefix"])
+                    self.assertIsNone(data["key_name"])
+                    self.assertEqual(data["features"]["allowed_profiles"], ["speed", "balanced", "quality", "custom"])
+                    self.assertEqual(data["usage"], {"kb_count": 0, "retrieve_daily_count": 0})
 
 
 class FixedEmbedding(EmbeddingProvider):
@@ -99,6 +116,7 @@ class AuthDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def test_tenant_isolation_lifecycle_ignored_body_and_disabled_auth(self):
         with TemporaryDirectory() as directory:
             app = create_app(Settings(auth_enabled=True, database_url=DATABASE_URL, log_dir=Path(directory), log_payloads=True))
+            isolated_rates(app, self)
             app.dependency_overrides[get_embedding_provider] = FixedEmbedding
             a, b = "auth-a-" + uuid4().hex, "auth-b-" + uuid4().hex
             key_a, hash_a, prefix_a = generate_api_key()
@@ -125,7 +143,7 @@ class AuthDatabaseTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(created.json()["data"]["tenant_id"], a)
                     created_b = await client.post("/knowledge-bases/create", headers=headers_b, json={"name": "beta library"})
                     kb_b = created_b.raise_for_status().json()["data"]["kb_id"]
-                    uploaded = await client.post("/documents/upload", headers=headers_a, json={
+                    uploaded = await upload_and_index(app, client, headers=headers_a, embedding=FixedEmbedding(), body={
                         "kb_id": kb_a, "title": "a.txt", "content": "private A", "tenant_id": b,
                     })
                     uploaded.raise_for_status()
@@ -139,7 +157,7 @@ class AuthDatabaseTests(unittest.IsolatedAsyncioTestCase):
                     named = await client.get("/knowledge-bases/tree", headers=headers_a, params={"keyword": "ALPHA"})
                     self.assertEqual(named.json()["data"][0]["knowledge_bases"][0]["kb_id"], kb_a)
 
-                    request = {"kb_id": kb_a, "user_id": "user", "query": "private", "tenant_id": a}
+                    request = {"profile": "speed", "kb_id": kb_a, "user_id": "user", "query": "private", "tenant_id": a}
                     denied = await client.post("/rag/retrieve", headers=headers_b, json=request)
                     self.assertEqual(denied.status_code, 404)
                     self.assertEqual(denied.json()["code"], ErrorCode.KNOWLEDGE_BASE_NOT_FOUND)
@@ -209,6 +227,7 @@ class AuthDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output.count(plaintext), 1)
         with TemporaryDirectory() as directory:
             app = create_app(Settings(auth_enabled=True, database_url=DATABASE_URL, log_dir=Path(directory)))
+            isolated_rates(app, self)
             async with app.router.lifespan_context(app):
                 async with app.state.session_factory() as session:
                     key = await session.scalar(select(ApiKey).where(ApiKey.tenant_id == tenant_id))

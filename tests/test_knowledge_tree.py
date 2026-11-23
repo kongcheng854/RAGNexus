@@ -71,9 +71,12 @@ class KnowledgeTreeTests(unittest.IsolatedAsyncioTestCase):
                 bases = tenants[0]["knowledge_bases"]
                 self.assertEqual([kb["kb_id"] for kb in bases], [str(new_kb), str(old_kb)])
                 self.assertEqual(bases[0]["documents"], [])
-                self.assertEqual([doc["document_id"] for doc in bases[1]["documents"]], [str(new_doc), str(old_doc)])
-                self.assertEqual([doc["chunk_count"] for doc in bases[1]["documents"]], [0, 2])
-                self.assertTrue(all(doc["status"] == "SUCCESS" for doc in bases[1]["documents"]))
+                docs = {doc["document_id"]: doc for doc in bases[1]["documents"]}
+                self.assertEqual(docs[str(failed_doc)]["status"], "FAILED")
+                self.assertEqual(docs[str(processing_doc)]["status"], "PROCESSING")
+                success = [doc for doc in bases[1]["documents"] if doc["status"] == "SUCCESS"]
+                self.assertEqual([doc["document_id"] for doc in success], [str(new_doc), str(old_doc)])
+                self.assertEqual([doc["chunk_count"] for doc in success], [0, 2])
                 filtered = await client.get("knowledge-bases/tree", params={"keyword": "旧知识库"})
                 self.assertEqual(len(filtered.json()["data"]), 1)
                 literal = await client.get("knowledge-bases/tree", params={"keyword": "%"})
